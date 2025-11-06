@@ -55,6 +55,7 @@
 #include <WebCore/DRMDeviceManager.h>
 #include <WebCore/GBMDevice.h>
 #include <gbm.h>
+#include <xf86drm.h>
 
 static constexpr uint64_t s_dmabufInvalidModifier = DRM_FORMAT_MOD_INVALID;
 #else
@@ -78,6 +79,33 @@ namespace WebKit {
 using namespace WebCore;
 
 WTF_MAKE_TZONE_ALLOCATED_IMPL(AcceleratedBackingStore);
+
+#if USE(GBM)
+static bool supportsDumbBuffer()
+{
+    auto& drmDeviceManager = DRMDeviceManager::singleton();
+    if (!drmDeviceManager.isInitialized()) {
+        DRMDevice device = drmMainDevice();
+        if (device.isNull())
+            return false;
+        drmDeviceManager.initializeMainDevice(WTFMove(device));
+    }
+
+    auto gbmDevice = drmDeviceManager.mainGBMDevice(DRMDeviceManager::NodeType::Render);
+    if (!gbmDevice)
+        return false;
+
+    int fd = gbm_device_get_fd(gbmDevice->device());
+    if (fd < 0)
+        return false;
+
+    uint64_t capability = 0;
+    if (drmGetCap(fd, DRM_CAP_DUMB_BUFFER, &capability) < 0)
+        return false;
+
+    return capability;
+}
+#endif
 
 OptionSet<RendererBufferTransportMode> AcceleratedBackingStore::rendererBufferTransportMode()
 {
@@ -104,6 +132,10 @@ OptionSet<RendererBufferTransportMode> AcceleratedBackingStore::rendererBufferTr
         // Don't claim to support hardware buffers if we don't have a device to import them.
         const auto& device = drmMainDevice();
         if (device.isNull())
+            return;
+
+        // DRM dumb buffer support is required for dma_buf_import.
+        if (!supportsDumbBuffer())
             return;
 #endif
 
